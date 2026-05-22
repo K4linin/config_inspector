@@ -1,23 +1,43 @@
-"""Страница «Настройки» — карточки разделов с иконками из icons/N.svg."""
+"""Страница «Настройки» — карточки разделов."""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QFrame, QPushButton, QScrollArea,
 )
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QPixmap, QPainter, QBrush, QPen
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import styles
 
-# Папка с иконками (SVG) рядом с пакетом pages/
+# Папка с иконками (SVG) рядом с папкой pages/
 _ICONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons")
 
 
-# ── Загрузка иконки из SVG или fallback-квадрат ──────────────────────────────
+# ── Иконка: сначала пробуем SVG, иначе рисуем символ ───────────────────────
 
-def _load_svg_px(n: int, bg: str, size: int = 32) -> QPixmap:
-    """Загружает icons/{n}.svg; при ошибке — рисует закрашенный квадрат."""
+def _icon_px(symbol: str, bg: str, size: int = 32) -> QPixmap:
+    """Цветной закруглённый квадрат + белый символ поверх (без серого фона)."""
+    px = QPixmap(size, size)
+    px.fill(Qt.GlobalColor.transparent)
+    p = QPainter(px)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    # фон — цветной
+    p.setBrush(QBrush(QColor(bg)))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(0, 0, size, size, 5, 5)
+    # символ — белый, рендерим как текст (не как emoji)
+    fnt = QFont("Segoe UI Symbol", int(size * 0.44))
+    fnt.setStyleStrategy(QFont.StyleStrategy.NoFontMerging)   # ← не подставлять emoji-шрифт
+    p.setFont(fnt)
+    p.setPen(QPen(QColor("white")))
+    p.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, symbol)
+    p.end()
+    return px
+
+
+def _load_icon_px(n: int, symbol: str, bg: str, size: int = 32) -> QPixmap:
+    """Пробуем загрузить icons/{n}.svg; если нет — рисуем _icon_px."""
     path = os.path.join(_ICONS_DIR, f"{n}.svg")
     if os.path.isfile(path):
         try:
@@ -26,27 +46,15 @@ def _load_svg_px(n: int, bg: str, size: int = 32) -> QPixmap:
             px.fill(Qt.GlobalColor.transparent)
             p = QPainter(px)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            # фоновый скруглённый прямоугольник
             p.setBrush(QBrush(QColor(bg)))
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(0, 0, size, size, 5, 5)
-            # SVG поверх
-            renderer = QSvgRenderer(path)
-            renderer.render(p)
+            QSvgRenderer(path).render(p)
             p.end()
             return px
         except Exception:
             pass
-    # Fallback: просто цветной квадрат
-    px = QPixmap(size, size)
-    px.fill(Qt.GlobalColor.transparent)
-    p = QPainter(px)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QBrush(QColor(bg)))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(0, 0, size, size, 5, 5)
-    p.end()
-    return px
+    return _icon_px(symbol, bg, size)
 
 
 # ── Section header ─────────────────────────────────────────────────────────────
@@ -54,11 +62,9 @@ def _load_svg_px(n: int, bg: str, size: int = 32) -> QPixmap:
 def _section_header(title: str) -> QHBoxLayout:
     row = QHBoxLayout()
     row.setSpacing(10)
-
     lbl = QLabel(title)
-    lbl.setStyleSheet("font-size:15px; color:#333; font-weight:500;")
+    lbl.setStyleSheet("font-size:15px;color:#333;font-weight:500;background:transparent;")
     row.addWidget(lbl)
-
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
     line.setStyleSheet("color:#CCCCCC;")
@@ -70,14 +76,15 @@ def _section_header(title: str) -> QHBoxLayout:
 
 class SettingsCard(QFrame):
     """
-    icon_n      : номер иконки (1–10), файл icons/{n}.svg
-    bg_color    : цвет фона иконки и заголовка
-    title       : заголовок карточки
+    icon_n   : номер иконки 1–10 (файл icons/{n}.svg или fallback-символ)
+    symbol   : символ для fallback (не emoji, только Unicode-текст)
+    bg_color : цвет фона иконки и заголовка
+    title    : заголовок
     description : описание
-    links       : список (текст, callable|None) — ссылки внизу карточки
-    on_click    : callable, вызывается при клике на карточку (None → info)
+    links    : список (текст, callable|None)
+    on_click : callable при клике на карточку
     """
-    def __init__(self, icon_n, bg_color, title, description,
+    def __init__(self, icon_n, symbol, bg_color, title, description,
                  links=None, on_click=None, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
@@ -87,7 +94,6 @@ class SettingsCard(QFrame):
         )
         self.setMinimumHeight(90)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-
         self._on_click = on_click
         self._title    = title
 
@@ -95,10 +101,12 @@ class SettingsCard(QFrame):
         h.setContentsMargins(12, 12, 12, 12)
         h.setSpacing(12)
 
-        # Иконка (SVG или цветной квадрат)
+        # Иконка — прозрачный фон у QLabel, чтобы не было серой плашки
         icon_lbl = QLabel()
-        icon_lbl.setPixmap(_load_svg_px(icon_n, bg_color, 32))
+        icon_lbl.setPixmap(_load_icon_px(icon_n, symbol, bg_color, 32))
         icon_lbl.setFixedSize(34, 34)
+        icon_lbl.setStyleSheet("background:transparent;border:none;")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         h.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignTop)
 
         # Текст
@@ -106,11 +114,14 @@ class SettingsCard(QFrame):
         v.setSpacing(3)
 
         title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{bg_color};")
+        title_lbl.setStyleSheet(
+            f"font-size:13px;font-weight:bold;color:{bg_color};"
+            "background:transparent;")
         v.addWidget(title_lbl)
 
         desc_lbl = QLabel(description)
-        desc_lbl.setStyleSheet(f"font-size:11px;color:{styles.TEXT_SECONDARY};")
+        desc_lbl.setStyleSheet(
+            f"font-size:11px;color:{styles.TEXT_SECONDARY};background:transparent;")
         desc_lbl.setWordWrap(True)
         v.addWidget(desc_lbl)
 
@@ -123,7 +134,7 @@ class SettingsCard(QFrame):
                     f'text-decoration:none;">{lnk_text}</a>'
                 )
                 lbl2.setOpenExternalLinks(False)
-                lbl2.setStyleSheet("font-size:11px;")
+                lbl2.setStyleSheet("font-size:11px;background:transparent;")
                 if lnk_cb:
                     lbl2.linkActivated.connect(lambda _=None, cb=lnk_cb: cb())
                 link_row.addWidget(lbl2)
@@ -139,32 +150,29 @@ class SettingsCard(QFrame):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.information(
                 self, self._title,
-                f"Раздел «{self._title}» открыт (демо-режим)."
-            )
+                f"Раздел «{self._title}» открыт (демо-режим).")
 
 
-# ── SettingsPage ───────────────────────────────────────────────────────────────
+# ── Открытие диалогов ──────────────────────────────────────────────────────────
 
 def _open_schedule(parent):
     from pages.settings_panels import SchedulePanel
-    dlg = SchedulePanel(parent)
-    dlg.exec()
+    SchedulePanel(parent).exec()
 
 def _open_scan(parent):
     from pages.settings_panels import ScanDialog
-    dlg = ScanDialog(parent)
-    dlg.exec()
+    ScanDialog(parent).exec()
 
 def _open_map(parent):
     from pages.settings_panels import NetworkMapPanel
-    dlg = NetworkMapPanel(parent)
-    dlg.exec()
+    NetworkMapPanel(parent).exec()
 
 def _open_reports(parent):
     from pages.settings_panels import ReportsPanel
-    dlg = ReportsPanel(parent)
-    dlg.exec()
+    ReportsPanel(parent).exec()
 
+
+# ── SettingsPage ───────────────────────────────────────────────────────────────
 
 class SettingsPage(QWidget):
     def __init__(self, parent=None):
@@ -185,16 +193,16 @@ class SettingsPage(QWidget):
         # ── Настройки сервера ──────────────────────────────────────────────
         v.addLayout(_section_header("Настройки сервера"))
 
-        # Карточки: (icon_n, bg_color, title, description, links, on_click)
-        # links = list of (text, callable|None)
+        # (icon_n, symbol, bg_color, title, description, links, on_click)
+        # symbol — чистый Unicode без emoji, рендерится как текст
         server_cards = [
-            (1, styles.ACCENT_GREEN, "Обработка событий",
+            (1,  "⚙",  styles.ACCENT_GREEN, "Обработка событий",
              "Задание триггеров для обработки событий системы и устройств",
              [], None),
-            (2, styles.ACCENT_GREEN, "Профили",
+            (2,  "☰",  styles.ACCENT_GREEN, "Профили",
              "Управление профилями для гибкой настройки параметров контроля устройств",
              [], None),
-            (3, styles.ACCENT_GREEN, "Устройства",
+            (3,  "⊟",  styles.ACCENT_GREEN, "Устройства",
              "Управление отчётами, проверками, контролем устройств и папок",
              [
                  ("Экспорт",      None),
@@ -203,13 +211,13 @@ class SettingsPage(QWidget):
                  ("Карта",        lambda: _open_map(self)),
              ],
              lambda: _open_scan(self)),
-            (4, styles.ACCENT_GREEN, "Отчёты",
+            (4,  "▤",  styles.ACCENT_GREEN, "Отчёты",
              "Настройка использования и контроля целостности отчётов",
              [], lambda: _open_reports(self)),
-            (5, styles.ACCENT_GREEN, "Проверки",
+            (5,  "✓",  styles.ACCENT_GREEN, "Проверки",
              "Управление проверками устройств, настройка правил и исключений",
              [], None),
-            (6, styles.ACCENT_GREEN, "Расписания",
+            (6,  "⊞",  styles.ACCENT_GREEN, "Расписания",
              "Настройка расписаний загрузки отчётов и выполнения операций с устройствами",
              [], lambda: _open_schedule(self)),
         ]
@@ -226,16 +234,16 @@ class SettingsPage(QWidget):
         v.addLayout(_section_header("Администрирование"))
 
         admin_cards = [
-            (7,  styles.ACCENT_BLUE, "Модули",
+            (7,  "⊕",  styles.ACCENT_BLUE, "Модули",
              "Подключение, отключение и настройка модулей системы",
              [], None),
-            (8,  styles.ACCENT_BLUE, "Пользователи",
+            (8,  "♟",  styles.ACCENT_BLUE, "Пользователи",
              "Управление пользователями системы и их правами",
              [("Настройки", None)], None),
-            (9,  styles.ACCENT_BLUE, "База данных",
+            (9,  "⊙",  styles.ACCENT_BLUE, "База данных",
              "Настройки хранения данных в БД",
              [], None),
-            (10, styles.ACCENT_BLUE, "Лицензии",
+            (10, "⚿",  styles.ACCENT_BLUE, "Лицензии",
              "Управление лицензиями системы",
              [], None),
         ]
@@ -244,11 +252,12 @@ class SettingsPage(QWidget):
         adm_grid.setSpacing(10)
         for i, args in enumerate(admin_cards):
             adm_grid.addWidget(SettingsCard(*args), i // 3, i % 3)
-        # Заполнитель для пустых ячеек
         filled = len(admin_cards)
         if filled % 3 != 0:
             for j in range(filled % 3, 3):
-                adm_grid.addWidget(QWidget(), filled // 3, j)
+                placeholder = QWidget()
+                placeholder.setStyleSheet("background:transparent;")
+                adm_grid.addWidget(placeholder, filled // 3, j)
         v.addLayout(adm_grid)
 
         v.addStretch()
