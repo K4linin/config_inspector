@@ -1,0 +1,41 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Config Inspector — docker-compose
+#
+#  Запуск:  docker compose up --build
+#  Браузер: http://localhost:6080  (noVNC web-клиент)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Основное приложение (PyQt6 GUI) ─────────────────────────────────────────
+  app:
+    build: .
+    image: config-inspector:latest
+    container_name: config_inspector_app
+    environment:
+      - DISPLAY=:99
+      - QT_QPA_PLATFORM=xcb
+      - QT_XCB_GL_INTEGRATION=none
+    volumes:
+      # Пробрасываем иконки, если добавляете SVG-файлы локально
+      - ./icons:/app/icons:ro
+    depends_on:
+      - xvfb-vnc
+    network_mode: service:xvfb-vnc
+    restart: unless-stopped
+
+  # ── Xvfb + x11vnc (виртуальный дисплей + VNC-сервер) ────────────────────────
+  xvfb-vnc:
+    image: ghcr.io/linuxserver/rdesktop:ubuntu-xfce
+    container_name: config_inspector_vnc
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Moscow
+    ports:
+      - "5900:5900"   # VNC (любой VNC-клиент)
+      - "6080:3000"   # noVNC (браузер)
+    shm_size: "1gb"
+    restart: unless-stopped
